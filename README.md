@@ -27,12 +27,12 @@ mxschmitt/action-tmate[4]
 name: CI
 on: [push]
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v2
-    - name: Setup tmate session
-      uses: mxschmitt/action-tmate@v2
+ build:
+  runs-on: ubuntu-latest
+  steps:
+   - uses: actions/checkout@v2
+   - name: Setup tmate session
+     uses: mxschmitt/action-tmate@v2
 ```
 ## 方案二
 csexton/debugger-action[6]
@@ -44,22 +44,24 @@ touch /tmp/keepalive
 **workflow 示例:**
 ```yaml
 name: debugger-action
-on: 
-  watch:
-    types: started
+on:
+ watch:
+  types: started
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-     - uses: actions/checkout@v2
-     - name: Setup Debug Session
-       uses: csexton/debugger-action@master
+ build:
+  runs-on: ubuntu-latest
+  steps:
+   - uses: actions/checkout@v2
+
+   - name: Setup Debug Session
+     uses: csexton/debugger-action@master
 ```
 
 ## 方案三
 此方案非基于 actions 实现，而是利用 ngrok 创建 TCP 隧道穿透内网来建立 SSH 连接。
 ```bash
 #!/bin/bash
+
 
 if [[ -z "$NGROK_TOKEN" ]]; then
   echo "Please set 'NGROK_TOKEN'"
@@ -71,31 +73,64 @@ if [[ -z "$USER_PASS" ]]; then
   exit 3
 fi
 
-# ... (脚本内容省略，见原文)
+echo "### Install ngrok ###"
+
+wget -q https://bin.equinox.io/c/4VmDzA7iaHb/ngrok-stable-linux-386.zip
+unzip ngrok-stable-linux-386.zip
+chmod +x ./ngrok
+
+echo "### Update user: $USER password ###"
+echo -e "$USER_PASS\n$USER_PASS" | sudo passwd "$USER"
 
 echo "### Start ngrok proxy for 22 port ###"
 
-# ... (ngrok 相关启动命令及输出提示信息省略，见原文)
+
+rm -f .ngrok.log
+./ngrok authtoken "$NGROK_TOKEN"
+./ngrok tcp 22 --log ".ngrok.log" &
+
+sleep 10
+HAS_ERRORS=$(grep "command failed" < .ngrok.log)
+
+if [[ -z "$HAS_ERRORS" ]]; then
+  echo ""
+  echo "=========================================="
+  echo "To connect: $(grep -o -E "tcp://(.+)" < .ngrok.log | sed "s/tcp:\/\//ssh $USER@/" | sed "s/:/ -p /")"
+  echo "=========================================="
+else
+  echo "$HAS_ERRORS"
+  exit 4
+fi
 ```
 
-首先，在 ngrok 官网[8] 注册并获取 Tunnel Authtoken。然后在 workflow 中配置如下：
+首先需要在 ngrok 的官网[8] 注册一个账户，并生成一个Tunnel Authtoken：https://dashboard.ngrok.com/auth
+。然后在 workflow 中配置如下：
 ```yaml
 name: Debugging with SSH
 on: push
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-     - uses: actions/checkout@v1
-     # ... 其他步骤
-     - name: Start SSH via Ngrok
-       if: ${{ failure() }}
-       run: curl -sL https://gist.githubusercontent.com/retyui/7115bb6acf151351a143ec8f96a7c561/raw/7099b9db76729dc5761da72aa8525f632d8875c9/debug-github-actions.sh | bash
-       env:
-         NGROK_TOKEN: ${{ secrets.NGROK_TOKEN }}
-         USER_PASS: ${{ secrets.USER_PASS }}
+ build:
+  runs-on: ubuntu-latest
+  steps:
+   - uses: actions/checkout@v1
 
-     # ... 其他步骤
+   - name: Try Build
+     run: ./not-exist-file.sh it bloke build
+
+   - name: Start SSH via Ngrok
+     if: ${{ failure() }}
+     run: curl -sL https://gist.githubusercontent.com/retyui/7115bb6acf151351a143ec8f96a7c561/raw/7099b9db76729dc5761da72aa8525f632d8875c9/debug-github-actions.sh | bash
+     env:
+      # After sign up on the https://ngrok.com/
+      # You can find this token here: https://dashboard.ngrok.com/get-started/setup
+      NGROK_TOKEN: ${{ secrets.NGROK_TOKEN }}
+
+      # This password you will use when authorizing via SSH 
+      USER_PASS: ${{ secrets.USER_PASS }}
+
+   - name: Don't kill instace
+     if: ${{ failure() }}
+     run: sleep 1h # Prevent to killing instance after failure
 ```
 在此方案中，**NGROK_TOKEN** 和 **USER_PASS** 应当从 GitHub Secrets 中安全获取。
 
